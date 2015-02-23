@@ -1,0 +1,154 @@
+#!/usr/bin/env python
+# -*- coding: iso-8859-15 -*-
+
+import os, re, sys
+from IPy import *
+
+###############
+# Configuration
+
+#DEBUG = True
+DEBUG = False
+
+###############
+
+
+def dump_hash(myhash):
+    for k in sorted(myhash.keys()):
+        print "%s\t%s" % (repr(k), repr(myhash[k]))
+
+
+def usage():
+    sys.stderr.write("Usage: %s junos-config prefix1 ...\n\n"
+                     "Note that junos-config must be in \"set\" format,\n"
+                     "that is: show configuration | display set |"
+                     " save foo.set.conf\n")
+    return 1
+
+
+
+def main():
+    try:
+        cfg_file = sys.argv[1]
+        prefix_list = []
+        for prefix in sys.argv[2:]:
+            prefix_list.append(IP(prefix))
+        if not prefix_list: raise
+
+    except:
+        return usage()
+
+    cfg = []
+    linenum = 0
+    for line in open(cfg_file, "rb"):
+        linenum += 1
+        line = line.strip()
+        cfg.append(line)
+
+    # Make address book
+    cfg_addrs = {}
+    cfg_addrsets = {}
+    addrs = {}
+    addrsets = {}
+    for line in cfg:
+        # is it address?
+        m = re.search("\s+security\s+address-book\s+\S+\s+address"
+                       "\s+(\S+)\s+(\S+)", line)
+        if m:
+            key = m.group(1)
+            cfg_addrs[key] = line
+            addrs[key] = IP(m.group(2))
+            continue
+
+        # is it address-set?
+        m = re.search("\s+security\s+address-book\s+\S+\s+address-set"
+                     "\s+(\S+)\s+address\s+(\S+)", line)
+        if m:
+            key = m.group(1)
+            if not key in cfg_addrsets: cfg_addrsets[key] = []
+            cfg_addrsets[key].append(line)
+            if not key in addrsets: addrsets[key] = []
+            addrsets[key].append(m.group(2))
+            continue
+
+
+    # Find all matching addresses
+    m_addrs = {}
+    for a in addrs.keys():
+        m = [x for x in prefix_list if addrs[a] in x]
+        if m: m_addrs[a] = addrs[a]
+
+    if DEBUG:
+        print "Matching addresses:"
+        dump_hash(m_addrs)
+        print
+
+    for k in sorted(m_addrs.keys()):
+        print(cfg_addrs[k])
+    print
+
+    # Find all matching address-addrsets
+    m_addrsets = {}
+    for g in addrsets.keys():
+        match = False
+        for a in addrsets[g]:
+            m = [x for x in prefix_list if addrs[a] in x]
+            if m:
+                match = True
+                break
+        if match: m_addrsets[g] = addrsets[g]
+
+    if DEBUG:
+        print "Matching addrsets:"
+        dump_hash(m_addrsets)
+        print
+
+    for k in sorted(m_addrsets.keys()):
+        print "\n".join(cfg_addrsets[k])
+    print
+
+    # Parse all security policies
+    cfg_policies = {}
+    policies = {}
+    for line in cfg:
+        m = re.search("\s+security\s+policies\s+from-zone\s+(\S+)"
+                     "\s+to-zone\s+(\S+)\s+policy\s+(\S+)\s+(.*)$", line)
+        if m:
+            key = (m.group(1), m.group(2), m.group(3))
+            if not key in cfg_policies: cfg_policies[key] = []
+            cfg_policies[key].append(line)
+            if not key in policies: policies[key] = []
+            policies[key].append(m.group(4))
+
+    if DEBUG:
+        print "Policies:"
+        dump_hash(policies)
+        print
+
+    # Find all matching policies
+    m_policies = {}
+    for p in policies.keys():
+        match = False
+        for line in policies[p]:
+            m = re.match("^match\s+(\w+)-address\s+(\S+)", line)
+            if m:
+                if m.group(2) in m_addrsets: match = True
+                if m.group(2) in m_addrs: match = True
+        if match: m_policies[p] = policies[p]
+
+    if DEBUG:
+        print "Matching policies:"
+        dump_hash(m_policies)
+        print
+
+    # Print out matching policies
+    for k in sorted(m_policies.keys()):
+        print "\n".join(cfg_policies[k])
+        print
+
+    return 0
+
+
+if __name__ == '__main__': sys.exit(main())
+
+# EOF
