@@ -1,0 +1,12 @@
+#!/bin/sh
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+for s in `zfs list -t snapshot | tail -n +2 | awk '{print $1}'`
+do
+  echo Remove snapshot $s
+  time zfs destroy -v $s
+done
+
+# EOF
