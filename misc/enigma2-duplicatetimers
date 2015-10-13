@@ -1,0 +1,91 @@
+#!/usr/bin/env python                    
+# -*- coding: iso-8859-15 -*-
+
+import os, sys, re, urllib2, pprint
+import xml.etree.ElementTree as ET
+
+
+DVR_API = "http://vu.i.siu.ro/web/"
+
+DELETE_TITLES = \
+{'Lentoturmatutkinta': True,
+ #'Myytinmurtajat': True,
+ 'Uutisvuoto': True,
+}
+
+
+def dump_elems(root, indent=0):
+    if not root.tag: return ''
+
+    ret = "%s%s %s\n" % (" " * indent, root.tag, root.text)
+    for child in root:
+        ret += dump_elems(child, indent+4)
+    return ret
+
+
+timer_seen = {}
+
+timers = urllib2.urlopen(DVR_API + "timerlist", timeout=10)
+timer_dump = timers.read()
+
+#print timer_dump
+#print "\n\n\n***\n\n\n"
+
+troot = ET.fromstring(timer_dump)
+
+for child in troot:
+    if child.tag == "e2timer":
+        mykey = {}
+        myprop = {}
+        hop = False
+        for tprop in child:
+            #print tprop.tag, tprop.text
+            myprop[tprop.tag] = tprop.text
+
+            if tprop.tag == "e2servicereference":
+                mykey['sref'] = tprop.text
+            elif tprop.tag == "e2timebegin":
+                mykey['begin'] = tprop.text
+            elif tprop.tag == "e2timeend":
+                mykey['end'] = tprop.text
+            elif tprop.tag == "e2name" and tprop.text in DELETE_TITLES:
+                hop = True
+
+        timer_key = ' '.join((mykey['sref'], mykey['begin'], mykey['end']))
+
+        print timer_key
+        print myprop['e2name']
+        #print dump_elems(child, 0)
+
+        if timer_key in timer_seen:
+            print "*** ALERT! Duplicate timer"
+            print "* DELETE TIMER"
+            url = DVR_API + "timerdelete?sRef=%s&begin=%s&end=%s" % \
+                            (myprop['e2servicereference'],
+                             myprop['e2timebegin'],
+                             myprop['e2timeend'])
+            print url
+            delete = urllib2.urlopen(url, timeout=10)
+            retval = delete.read()
+            print retval
+            print
+            continue
+
+        timer_seen[timer_key] = True
+
+        if hop:
+            print "* DELETE TIMER"
+            url = DVR_API + "timerdelete?sRef=%s&begin=%s&end=%s" % \
+                            (myprop['e2servicereference'],
+                             myprop['e2timebegin'],
+                             myprop['e2timeend'])
+            print url
+            delete = urllib2.urlopen(url, timeout=10)
+            retval = delete.read()
+            print retval
+            print
+
+
+
+sys.exit(0)
+# EOF
