@@ -1,0 +1,83 @@
+#!/usr/bin/env python
+# -*- coding: iso-8859-15 -*-
+#
+# Configure collectd to use graphite output plugin on localhost port 2003
+#
+# This script will save Carbon/Graphite format stats data to local spool files.
+# Then you can utilize rsync+ssh to move it elsewhere, for example.
+
+
+import os, platform, re, subprocess, sys, time
+import socket
+
+SPOOL = '/some/path/to/spool' % STATS
+NODE, domain = platform.node().split('.', 1)
+
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('localhost', 2003))
+s.listen(1)
+
+children = {}
+while True:
+    c, client = s.accept()
+    cpid = os.fork()
+    if cpid != 0:
+        # parent process
+        c.close()
+        children[cpid] = 1
+        print repr(children)
+        time.sleep(1)
+        for cpid in children.keys():
+            pid, exitval = os.waitpid(cpid, os.WNOHANG)
+            if pid != 0:
+                print "pid %d exit %d" % (pid, exitval)
+                del children[cpid]
+        continue
+
+    # child process, read and spool incoming data
+    c.setblocking(0)
+    buf=''
+    while True:
+	try:
+            data = c.recv(256)
+            if data:
+                buf += data
+            else:
+                # socket is closed
+                break
+
+        except:
+            # no more data available this time, process buffer
+	    if buf:
+                spoolfile = "%s/%s-collectd-%s.txt" % (SPOOL, NODE, time.time())
+                tmpfile = spoolfile + '.tmp'
+                with open(tmpfile, "wb") as f:
+                    data = buf.split("\n")
+                    i = 0
+                    for d in data:
+                        i += 1
+                        name, value, stamp = (None, None, None)
+                        try:
+                            name, value, timestamp = d.split()
+                        except:
+                            continue
+
+                        path = name.split('.')
+                        fqdn = path[0]
+                        node, domain = fqdn.split('_', 1)
+                        path[0] = node
+                        name = '.'.join(path)
+                        f.write("%s %s %s\n" % (name, value, timestamp))
+                os.rename(tmpfile, spoolfile)
+
+            buf = ''
+            time.sleep(1)
+
+    # child process ends
+    c.close()
+    sys.exit(0)
+
+sys.exit(0)
+# EOF
