@@ -8,7 +8,7 @@ cmds = (('/usr/bin/ssh', 'vaja',
          'digitemp_DS9097U -c digitemp-ttyUSB0.conf -q -a -o"%R %.2C"'),
        ('/usr/bin/ssh', 'vaja',
         'digitemp_DS9097U -c digitemp-ttyUSB1.conf -q -a -o"%R %.2C"'))
-dest = 'nas.i.siu.ro'
+dest = 'localhost'
 port = 8086
 uri = '/write?db=digitemp&precision=s'
 
