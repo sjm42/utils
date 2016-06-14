@@ -1,0 +1,35 @@
+#!/usr/bin/env python
+# -*- coding: iso-8859-15 -*-
+
+import os, subprocess, sys, time
+import httplib, urllib
+
+cmds = (('/usr/bin/ssh', 'vaja',
+         'digitemp_DS9097U -c digitemp-ttyUSB0.conf -q -a -o"%R %.2C"'),
+       ('/usr/bin/ssh', 'vaja',
+        'digitemp_DS9097U -c digitemp-ttyUSB1.conf -q -a -o"%R %.2C"'))
+dest = 'nas.i.siu.ro'
+port = 8086
+uri = '/write?db=digitemp&precision=s'
+
+
+now = time.time()
+data = ''
+for cmd in cmds:
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=False)
+    for line in iter(p.stdout.readline, ''):
+        line = line.strip()
+        sensor, temp = line.split()
+        data += 'digitemp,sensor=%s value=%s %d\n' % (sensor, temp, now)
+    p.stdout.close()
+    os.waitpid(p.pid, 0)
+#print data
+
+c = httplib.HTTPConnection(dest, port, timeout=1)
+c.request('POST', uri, data)
+r = c.getresponse()
+#print r.status, r.reason
+#print r.read()
+
+sys.exit(0)
+# EOF
