@@ -30,6 +30,16 @@ work=$HOME/zm-work
 mkdir -p $work
 cd $work
 
+
+# Turn off iptables, otherwise the web gui at port 8000 would be unreachable.
+# You could alternatively just open up the tcp port with an iptable rule.
+
+/etc/init.d/iptables stop
+/etc/init.d/ip6tables stop
+chkconfig iptables off
+chkconfig ip6tables off
+
+
 # Install some necessary libraries, and devel tools
 yum install -y wget git lsof ldns ldns-devel openssl-devel libidn-devel || exit 1
 yum groupinstall -y "Development Tools" || exit 1
@@ -171,6 +181,7 @@ expect fork
 pre-start script
   [ -d "/var/log/zonemaster" ] || mkdir -p /var/log/zonemaster
   chown -R zonemast:zonemast /var/log/zonemaster
+  sleep 5
 end script
 exec /opt/zonemaster/bin/starman \
   --user=zonemast \
@@ -192,7 +203,9 @@ umask 022
 limit nofile 4096 4096
 expect daemon
 pre-start script
-  sleep 5
+  [ -d "/var/log/zonemaster" ] || mkdir -p /var/log/zonemaster
+  chown -R zonemast:zonemast /var/log/zonemaster
+  sleep 10
 end script
 exec /opt/zonemaster/bin/zm_wb_daemon \
   --user=zonemast \
@@ -235,7 +248,7 @@ expect fork
 pre-start script
   [ -d "/var/log/zonemaster" ] || mkdir -p /var/log/zonemaster
   chown -R zonemast:zonemast /var/log/zonemaster
-  sleep 2
+  sleep 5
 end script
 exec /opt/zonemaster/bin/starman \
   --user=zonemast \
@@ -249,15 +262,6 @@ exec /opt/zonemaster/bin/starman \
   /opt/zonemaster/share/zonemaster/zm_app/bin/app.pl
 # EOF
 EOF
-
-
-# Turn off iptables, otherwise the web gui at port 8000 would be unreachable.
-# You could alternatively just open up the tcp port with an iptable rule.
-
-/etc/init.d/iptables stop
-/etc/init.d/ip6tables stop
-chkconfig iptables off
-chkconfig ip6tables off
 
 
 # Finally, start Zonemaster services
