@@ -1,0 +1,50 @@
+#!/usr/bin/env python                    
+# -*- coding: iso-8859-15 -*-
+
+import os, sys, re
+
+
+def newname(n):
+    # Replace all consecutive whitespace chars with one underscore.
+    n = re.sub('\s+', '_', n)
+    
+    # Replace all consecutive "non-word" chars with one underscore.
+    # "Word" chars are a-z, A-Z, numbers and underscore.
+    # Dots "." are also preserved.
+    n = re.sub('[^\w\.]+', '_', n)
+
+    # Replace consecutive underscores with a single one.
+    n = re.sub('_+', '_', n)
+
+    # Replace consecutive dots with a single one.
+    n = re.sub('\.+', '.', n)
+
+    # If the name begins with non-alphanumeric chars, just delete them.
+    n = re.sub('^[^A-Za-z0-9]+', '', n)
+
+    # The name ends with non-alphanumeric chars, just delete them.
+    n = re.sub('[^A-Za-z0-9]+$', '', n)
+
+    # Non-alphanumeric chars are also not allowed just before a dot.
+    n = re.sub('[^A-Za-z0-9]+\.', '.', n)
+
+    # Now at last, replace all consecutive underscores with a dash.
+    n = re.sub('_+', '-', n)
+
+    return n
+
+
+for root, dirs, files in os.walk(sys.argv[1], topdown=False):
+    for f1 in files + dirs:
+        f2 = newname(f1)
+        if f1 == f2:
+            continue
+
+        n1 = os.path.join(root, f1)
+        n2 = os.path.join(root, f2)
+
+        print "old: %s\nnew: %s\n" % (n1, n2)
+        os.rename(n1, n2)
+
+sys.exit(0)
+# EOF
