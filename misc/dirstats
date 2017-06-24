@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Please refer to: https://pypi.python.org/pypi/inotify
+# for documentation about inotify stuff.
+
+
+import os, sys, signal, time
+import inotify.adapters
+from inotify.constants import *
+
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+EV = {'IN_CLOSE_WRITE': 'CLOSE',
+      'IN_CLOSE_NOWRITE': 'CLOSE',
+      'IN_OPEN': 'OPEN',
+      'IN_MOVED_FROM': 'MOVE_FROM',
+      'IN_MOVED_TO': 'MOVE_TO',
+      'IN_CREATE': 'CREATE',
+      'IN_DELETE': 'DELETE'
+}
+
+STATS_INT = 60
+
+dump_flag = False
+
+def handle_alarm(signum, frame):
+    global dump_flag
+    dump_flag = True
+
+def timestamp():
+    return time.strftime('%Y%m%d-%H%M%S')
+
+def dump_stats(s):
+    ts = timestamp()
+    for d in sorted(s.keys()):
+        for e in sorted(s[d].keys()):
+            print('%s %s %s %d' % (ts, d, e, s[d][e]))
+
+
+def main():
+    global dump_flag
+    stats = {}
+    signal.signal(signal.SIGALRM, handle_alarm)
+
+    i = inotify.adapters.Inotify()
+    for d in sys.argv[1:]:
+        i.add_watch(d.encode('utf-8'),
+                    IN_CREATE|IN_DELETE|IN_MOVE)
+        # Maybe IN_OPEN | IN_CLOSE too
+
+    signal.alarm(STATS_INT)
+    egen = i.event_gen()
+    while True:
+
+        # This will block max 1 sec
+        event = next(egen)
+
+        if dump_flag:
+            signal.alarm(0)
+            dump_stats(stats)
+            stats = {}
+            dump_flag = False
+            signal.alarm(STATS_INT)
+
+        if event is None: continue
+
+        (header, type_names, watch_path, filename) = event
+        w_path = watch_path.decode('utf-8')
+        if not w_path in stats:
+            s = {}
+            stats[w_path] = s
+        else:
+            s = stats[w_path]
+
+        if 'IN_ISDIR' in type_names:
+            prefix = 'D_'
+        else:
+            prefix = 'F_'
+
+        for t in type_names:
+            if t == 'IN_ISDIR': continue
+            k = prefix + EV[t]
+            if k in s:
+                s[k] += 1
+            else:
+                s[k] = 1
+
+
+    for d in sys.argv[1:]:
+        i.remove_watch(d)
+
+if __name__ == '__main__':
+    main()
+
+sys.exit(0)
+# EOF
