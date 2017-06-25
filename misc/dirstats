@@ -41,6 +41,9 @@ def dump_stats(s):
 def main():
     global dump_flag
     stats = {}
+    sl = 60 - (int(time.time()) % STATS_INT)
+    # print("Sleep %d" % sl)
+    time.sleep(sl)
     signal.signal(signal.SIGALRM, handle_alarm)
 
     i = inotify.adapters.Inotify()
@@ -49,7 +52,10 @@ def main():
                     IN_CREATE|IN_DELETE|IN_MOVE)
         # Maybe IN_OPEN | IN_CLOSE too
 
-    signal.alarm(STATS_INT)
+    al = 60 - (int(time.time()) % STATS_INT)
+    if al < 1: al = 60
+    # print("Alarm %d" % al)
+    signal.alarm(al)
     egen = i.event_gen()
     while True:
 
@@ -61,7 +67,10 @@ def main():
             dump_stats(stats)
             stats = {}
             dump_flag = False
-            signal.alarm(STATS_INT)
+            al = 60 - (int(time.time()) % STATS_INT)
+            if al < 1: al = 60
+            # print("Alarm %d" % al)
+            signal.alarm(al)
 
         if event is None: continue
 
