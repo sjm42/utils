@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+
+import os, sys, time
+import datetime, logging, asyncio
+import aiocoap.resource as resource
+import aiocoap
+import urllib.request
+from collections import deque
+
+
+OUT_SENSOR = '28F41A2800008091'
+OUT_AVG = 600
+IDB_AVG = 300
+AVGS = (IDB_AVG, OUT_AVG)
+DB_RATE = 60
+
+#IDB_URL = 'http://localhost:8086/write?db=digitemp&precision=s'
+IDB_URL = 'http://nas.i.siu.ro:8086/write?db=digitemp&precision=s'
+
+t_history = {}
+
+# logging setup
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s',
+                    filename=os.environ['HOME']+'/coap.log')
+logging.getLogger("coap-server").setLevel(logging.INFO)
+
+
+class tbuf:
+    def __init__(self, alist):
+        self.hist = {}
+        self.dbts = {}
+        self.avgs = AVGS
+        if alist: self.avgs = alist
+
+    def add(self, sensor, temp):
+        t = time.time()
+
+        # initialize sensor data if not found
+        if sensor not in self.hist:
+            self.hist[sensor] = {}
+            # only start database updates after 1-2 minutes
+            self.dbts[sensor] = int(t) - (int(t) % 60) + (2*DB_RATE)
+            for a in self.avgs:
+                kb = '_'.join(('buf', str(a)))
+                self.hist[sensor][kb] = deque([])
+
+        s = self.hist[sensor]
+        for a in self.avgs:
+            # avg and buf keys
+            ka = '_'.join(('avg', str(a)))
+            kb = '_'.join(('buf', str(a)))
+
+            # append new value to buf
+            s[kb].append((temp, t+a))
+
+            # expire old values from buf
+            e = 0
+            while True:
+                if t > s[kb][0][1]:
+                    p = s[kb].popleft()
+                    e += 1
+                    logging.debug('Expired[%s]: %s' % (kb, repr(p)))
+                else:
+                    break
+            logging.debug('Expired[%s]: %d records.' % (kb, e))
+
+            # calculate new average
+            tsum = 0.0
+            for v, t in s[kb]: tsum += v
+            s[ka] = tsum / float(len(s[kb]))
+        return self
+
+    def avg_lens(self):
+        return self.avgs
+
+    def avg(self, sensor, alen):
+        if sensor not in self.hist: return None
+        if alen not in self.avgs: return None
+        ka = '_'.join(('avg', str(alen)))
+        return self.hist[sensor][ka]
+
+    def sensors(self):
+        return sorted(self.hist.keys())
+
+    def pp(self):
+        ret = ''
+        for s in sorted(self.hist.keys()):
+            ret += s+':\n'
+            for c in sorted(self.hist[s].keys()):
+                ret += '  %s: %s\n' % (c, repr(self.hist[s][c]))
+        return ret.strip()
+
+
+class store_temp(resource.Resource):
+    def __init__(self):
+        super(store_temp, self).__init__()
+
+    async def render_post(self, request):
+        global tb
+        payload = ''
+        try:
+            sensor, temp = request.payload.split()
+            sensor = sensor.decode('ascii')
+            temp = float(temp)
+            logging.info('COAP POST store_temp: %s %.2f' % (sensor, temp))
+
+            tb.add(sensor, temp)
+            logging.debug('tb.hist:\n' + tb.pp())
+
+            # Only post data into InfluxDB in every DB_RATE seconds
+            # Use the IDB_AVG floating average for smoothing
+            t = time.time()
+            if t > tb.dbts[sensor]:
+                ts = int(t) - (int(t) % 60)
+                next_dbts = ts + DB_RATE
+                tb.dbts[sensor] = next_dbts
+
+                favg = tb.avg(sensor, IDB_AVG)
+                logging.info('IDB POST %s %.2f %d' % (sensor, favg, ts))
+                idb_data = 'digitemp,sensor=%s value=%.2f %d\n' % \
+                    (sensor, favg, ts)
+
+                post_data = idb_data.encode()
+                req = urllib.request.Request(IDB_URL, data=post_data)
+                resp = urllib.request.urlopen(req)
+
+            logging.debug('\n')
+            payload = "OK".encode('ascii')
+            return aiocoap.Message(code=aiocoap.CONTENT, payload=payload)
+
+        except Exception as e:
+            logging.error('Exception: ' + repr(e))
+            payload = "FAIL".encode('ascii')
+            return aiocoap.Message(code=aiocoap.BAD_REQUEST, payload=payload)
+
+
+class list_sensors(resource.Resource):
+    def __init__(self):
+        super(list_sensors, self).__init__()
+
+    async def render_get(self, request):
+        global tb
+        payload = ''
+        try:
+            s = ' '.join(tb.sensors())
+            logging.info('COAP GET list_sensors: ' + s)
+            payload = s.encode('ascii')
+            return aiocoap.Message(code=aiocoap.CONTENT, payload=payload)
+
+        except Exception as e:
+            logging.error('Exception: ' + repr(e))
+            payload = "FAIL".encode('ascii')
+            return aiocoap.Message(code=aiocoap.BAD_REQUEST, payload=payload)
+
+
+class avg_out(resource.Resource):
+    def __init__(self):
+        super(avg_out, self).__init__()
+
+    async def render_get(self, request):
+        global tb
+        payload = ''
+        try:
+            avg = tb.avg(OUT_SENSOR, OUT_AVG)
+            s_avg = '%.2f' % (avg)
+            logging.info('COAP GET avg_out: ' + s_avg)
+            payload = s_avg.encode('ascii')
+            return aiocoap.Message(code=aiocoap.CONTENT, payload=payload)
+
+        except Exception as e:
+            logging.error('Exception: ' + repr(e))
+            payload = "FAIL".encode('ascii')
+            return aiocoap.Message(code=aiocoap.BAD_REQUEST, payload=payload)
+
+
+class avg_sensor(resource.Resource):
+    def __init__(self):
+        super(avg_sensor, self).__init__()
+
+    async def render_post(self, request):
+        global tb
+        payload = ''
+        try:
+            sensor = request.payload
+            sensor = sensor.decode('ascii')
+            logging.info('COAP POST avg_sensor: %s' % sensor)
+
+            if sensor not in tb.sensors():
+                logging.info('     sensor not found: ' + sensor)
+                payload = 'ERR'.encode('ascii')
+                return aiocoap.Message(code=aiocoap.CONTENT, payload=payload)
+
+            avg = tb.avg(sensor, OUT_AVG)
+            s_avg = '%.2f' % (avg)
+            logging.info('COAP POST avg_sensor(%s): %s' % (sensor, s_avg))
+            payload = s_avg.encode('ascii')
+            return aiocoap.Message(code=aiocoap.CONTENT, payload=payload)
+
+        except Exception as e:
+            logging.error('Exception: ' + repr(e))
+            payload = "FAIL".encode('ascii')
+            return aiocoap.Message(code=aiocoap.BAD_REQUEST, payload=payload)
+
+
+
+def main():
+    # Resource tree creation
+    root = resource.Site()
+
+    root.add_resource(('.well-known', 'core'), resource.WKCResource(root.get_resources_as_linkheader))
+    root.add_resource(('store_temp',), store_temp())
+    root.add_resource(('list_sensors',), list_sensors())
+    root.add_resource(('avg_out',), avg_out())
+    root.add_resource(('avg_sensor',), avg_sensor())
+    root.add_resource(('list_sensors',), list_sensors())
+
+    asyncio.Task(aiocoap.Context.create_server_context(root))
+    asyncio.get_event_loop().run_forever()
+
+
+tb = tbuf(AVGS)
+
+if __name__ == "__main__":
+    main()
+
+# EOF
