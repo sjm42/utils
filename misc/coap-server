@@ -218,10 +218,13 @@ def main():
     asyncio.Task(aiocoap.Context.create_server_context(root))
     asyncio.get_event_loop().run_forever()
 
+    # never reached, really
+    return 0
+
 
 tb = tbuf(AVGS)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 
 # EOF
