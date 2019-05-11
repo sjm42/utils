@@ -10,7 +10,7 @@
 import os, platform, re, subprocess, sys, time
 import socket
 
-SPOOL = '/some/path/to/spool' % STATS
+SPOOL = '/some/path/to/spool'
 NODE, domain = platform.node().split('.', 1)
 
 

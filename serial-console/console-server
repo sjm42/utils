@@ -14,9 +14,10 @@ RECV_BUFSIZE = 256
 
 SERIAL_PORT = '/dev/ttyUSB0'
 SERIAL_SPEED = 115200
+ENABLE_SERIAL_WRITE = True
 TCP_HOST = 'localhost'
 TCP_PORT = 14242
-LOGLVL = L_INFO
+LOGLVL = L_DEBUG
 
 ###################
 # Utility functions
@@ -56,6 +57,10 @@ ser.timeout = 0
 data = types.SimpleNamespace(stype='serial', addr=None, inb=b'', outb=b'')
 sel.register(ser, selectors.EVENT_READ, data=data)
 mylog(L_INFO, 'Opened serial port '+SERIAL_PORT)
+if ENABLE_SERIAL_WRITE:
+    mylog(L_INFO, 'Serial write enabled.')
+else:
+    mylog(L_INFO, 'Serial write disabled.')
 
 lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -74,6 +79,30 @@ net_clients = {}
 ###########
 # Functions
 
+def cleanup_and_exit():
+    try:
+        sel.unregister(ser)
+        ser.close()
+    except:
+        pass
+    try:
+        sel.unregister(lsock)
+        lsock.close()
+    except:
+        pass
+    for c in net_clients:
+        try:
+            key = sel.get_key(c)
+            f = key.fileobj
+            data = key.data
+            f.close()
+        except:
+            pass
+    mylog(L_INFO, 'Clean exit.')
+    sys.exit(1)
+    return None
+
+
 def client_status():
     mylog(L_DEBUG, 'Now I have %d clients:' % len(net_clients))
     for c in net_clients:
@@ -89,7 +118,12 @@ def handle_listener(key, mask):
     f = key.fileobj
     data = key.data
 
-    conn, addr = f.accept()
+    try:
+        conn, addr = f.accept()
+    except:
+        mylog(L_ERROR, 'accept failed.')
+        return None
+
     mylog(L_INFO, 'accepted connection from'+str(addr))
     conn.setblocking(False)
     newdata = types.SimpleNamespace(stype='net_client', addr=addr, inb=b'', outb=b'')
@@ -107,7 +141,11 @@ def handle_serial(key, mask):
     data = key.data
 
     if mask & selectors.EVENT_READ:
-        ser_data = f.read(1024)
+        try:
+            ser_data = f.read(1024)
+        except:
+            ser_data = None
+
         if ser_data:
             mylog(L_DEBUG, 'serial read: '+str(ser_data))
             for c in net_clients:
@@ -118,11 +156,29 @@ def handle_serial(key, mask):
                            selectors.EVENT_READ|selectors.EVENT_WRITE,
                            ckey.data)
         else:
-            mylog(L_ERROR, 'WTF? Did not get anything from serial.')
+            mylog(L_ERROR, 'serial EVENT_READ: cannot read. Exit.')
+            return cleanup_and_exit()
 
     if mask & selectors.EVENT_WRITE:
-        # If we would ever write to serial, we would do it here.
-        mylog(L_ERROR, 'serial write event, should not happen.')
+        if not data.outb:
+            # Should not happen
+            mylog(L_ERROR, 'serial EVENT_WRITE with no data? Turn off write events.')
+            sel.modify(f, selectors.EVENT_READ, data)
+            return None
+
+        try:
+            wrote = f.write(data.outb)
+        except:
+            wrote = 0
+        if wrote > 0:
+            data.outb = data.outb[wrote:]
+            if not data.outb:
+                # Output buffer is empty, disable write events to save cpu.
+                sel.modify(f, selectors.EVENT_READ, data)
+        else:
+            # Our serial port is gone?
+            mylog(L_INFO, 'serial EVENT_WRITE: cannot write. Exit.')
+            return cleanup_and_exit()
     return None
 
 
@@ -140,9 +196,16 @@ def handle_client(key, mask):
         if recv_data:
             # If we receive data from network connections,
             # log it and then throw away.
-            mylog(L_INFO, 'Ignored data from client '+str(data.addr))
+            mylog(L_INFO, 'Received data from client '+str(data.addr))
             mylog(L_DEBUG, 'data: '+str(recv_data))
-            recv_data = None
+            if ENABLE_SERIAL_WRITE:
+                mylog(L_DEBUG, 'writing to serial')
+                ser_key = sel.get_key(ser)
+                ser_key.data.outb += recv_data
+                # Enable write events too to actually send them
+                sel.modify(ser_key.fileobj,
+                           selectors.EVENT_READ|selectors.EVENT_WRITE,
+                           ser_key.data)
         else:
             # Our client is gone.
             mylog(L_INFO, 'EVENT_READ: closing connection to '+str(data.addr))
@@ -155,24 +218,26 @@ def handle_client(key, mask):
     if mask & selectors.EVENT_WRITE:
         if not data.outb:
             # Should not happen
-            mylog(L_ERROR, 'client EVENT_WRITE with no pending data?')
+            mylog(L_ERROR, 'net_client EVENT_WRITE with no data? Turn off write events.')
+            sel.modify(f, selectors.EVENT_READ, data)
+            return None
+
+        try:
+            sent = f.send(data.outb)
+        except:
+            sent = 0
+        if sent > 0:
+            data.outb = data.outb[sent:]
+            if not data.outb:
+                # Output buffer is empty, disable write events to save cpu.
+                sel.modify(f, selectors.EVENT_READ, data)
         else:
-            try:
-                sent = f.send(data.outb)
-            except:
-                sent = 0
-            if sent > 0:
-                data.outb = data.outb[sent:]
-                if not data.outb:
-                    # Output buffer is empty, disable write events to save cpu.
-                    sel.modify(f, selectors.EVENT_READ, data)
-            else:
-                # Our client is gone.
-                mylog(L_INFO, 'EVENT_WRITE: closing connection to '+str(data.addr))
-                sel.unregister(f)
-                del net_clients[f]
-                f.close()
-                if LOGLVL >= L_DEBUG: client_status()
+            # Our client is gone.
+            mylog(L_INFO, 'EVENT_WRITE: closing connection to '+str(data.addr))
+            sel.unregister(f)
+            del net_clients[f]
+            f.close()
+            if LOGLVL >= L_DEBUG: client_status()
     return None
 
 
