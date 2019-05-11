@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys, time, serial, socket, selectors, types
+
+###########
+# Constants
+
+L_FATAL, L_ERROR, L_INFO, L_DEBUG = 0, 1, 2, 3
+RECV_BUFSIZE = 256
+
+###############
+# Configurables
+
+SERIAL_PORT = '/dev/ttyUSB0'
+SERIAL_SPEED = 115200
+TCP_HOST = 'localhost'
+TCP_PORT = 14242
+LOGLVL = L_INFO
+
+###################
+# Utility functions
+
+S_LOGLVL = {0: 'FATAL',
+            1: 'ERROR',
+            2: 'INFO',
+            3: 'DEBUG'}
+
+def timestamp(t=None):
+    if not t: t = time.time()
+    return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(t))
+
+def mylog(level, msg):
+    if LOGLVL < level: return None
+    msg = msg.rstrip()
+    for ln in msg.splitlines():
+        sys.stderr.write('[{}] {} {}\n'.format(timestamp(), S_LOGLVL[level], ln))
+    return None
+
+
+################
+# Program begins
+
+sel = selectors.DefaultSelector()
+
+ser = serial.Serial(SERIAL_PORT, baudrate=SERIAL_SPEED)
+ser.bytesize = serial.EIGHTBITS
+ser.parity = serial.PARITY_NONE
+ser.stopbits = serial.STOPBITS_ONE
+ser.xonxoff = False
+ser.rtscts = False
+ser.dsrdtr = False
+ser.timeout = 0
+
+# Create a 'serial' type IO handle
+data = types.SimpleNamespace(stype='serial', addr=None, inb=b'', outb=b'')
+sel.register(ser, selectors.EVENT_READ, data=data)
+mylog(L_INFO, 'Opened serial port '+SERIAL_PORT)
+
+lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+lsock.bind((TCP_HOST, TCP_PORT))
+lsock.listen()
+lsock.setblocking(False)
+# Create a 'net_listener' type IO handle
+data = types.SimpleNamespace(stype='net_listener', addr=None, inb=b'', outb=b'')
+sel.register(lsock, selectors.EVENT_READ, data=data)
+mylog(L_INFO, 'Listening on '+str(lsock.getsockname()))
+
+net_clients = {}
+
+
+###########
+# Functions
+
+def client_status():
+    mylog(L_DEBUG, 'Now I have %d clients:' % len(net_clients))
+    for c in net_clients:
+        key = sel.get_key(c)
+        mylog(L_DEBUG, repr(c))
+        mylog(L_DEBUG, net_clients[c])
+    return None
+
+
+# Handle listener
+# New IO handles of type 'net_client' are made here.
+def handle_listener(key, mask):
+    f = key.fileobj
+    data = key.data
+
+    conn, addr = f.accept()
+    mylog(L_INFO, 'accepted connection from'+str(addr))
+    conn.setblocking(False)
+    newdata = types.SimpleNamespace(stype='net_client', addr=addr, inb=b'', outb=b'')
+    # Only enable read events until we have something to write
+    sel.register(conn, selectors.EVENT_READ, data=newdata)
+    net_clients[conn] = repr(addr)
+    if LOGLVL >= L_DEBUG: client_status()
+    return None
+
+
+# Handle serial port
+# Duplicate data received to all 'net_client' type IO handles
+def handle_serial(key, mask):
+    f = key.fileobj
+    data = key.data
+
+    if mask & selectors.EVENT_READ:
+        ser_data = f.read(1024)
+        if ser_data:
+            mylog(L_DEBUG, 'serial read: '+str(ser_data))
+            for c in net_clients:
+                ckey = sel.get_key(c)
+                ckey.data.outb += ser_data
+                # Enable write events too to actually send them
+                sel.modify(ckey.fileobj,
+                           selectors.EVENT_READ|selectors.EVENT_WRITE,
+                           ckey.data)
+        else:
+            mylog(L_ERROR, 'WTF? Did not get anything from serial.')
+
+    if mask & selectors.EVENT_WRITE:
+        # If we would ever write to serial, we would do it here.
+        mylog(L_ERROR, 'serial write event, should not happen.')
+    return None
+
+
+# Handle network clients, type 'net_client'
+def handle_client(key, mask):
+    f = key.fileobj
+    data = key.data
+
+    # We received something, or the socket was closed.
+    if mask & selectors.EVENT_READ:
+        try:
+            recv_data = f.recv(RECV_BUFSIZE)
+        except:
+            recv_data = None
+        if recv_data:
+            # If we receive data from network connections,
+            # log it and then throw away.
+            mylog(L_INFO, 'Ignored data from client '+str(data.addr))
+            mylog(L_DEBUG, 'data: '+str(recv_data))
+            recv_data = None
+        else:
+            # Our client is gone.
+            mylog(L_INFO, 'EVENT_READ: closing connection to '+str(data.addr))
+            sel.unregister(f)
+            del net_clients[f]
+            f.close()
+            if LOGLVL >= L_DEBUG: client_status()
+
+    # We are to write something
+    if mask & selectors.EVENT_WRITE:
+        if not data.outb:
+            # Should not happen
+            mylog(L_ERROR, 'client EVENT_WRITE with no pending data?')
+        else:
+            try:
+                sent = f.send(data.outb)
+            except:
+                sent = 0
+            if sent > 0:
+                data.outb = data.outb[sent:]
+                if not data.outb:
+                    # Output buffer is empty, disable write events to save cpu.
+                    sel.modify(f, selectors.EVENT_READ, data)
+            else:
+                # Our client is gone.
+                mylog(L_INFO, 'EVENT_WRITE: closing connection to '+str(data.addr))
+                sel.unregister(f)
+                del net_clients[f]
+                f.close()
+                if LOGLVL >= L_DEBUG: client_status()
+    return None
+
+
+###################
+# Main program loop
+
+while True:
+    events = sel.select(timeout=None)
+    for key, mask in events:
+        t = key.data.stype
+        if t == 'serial':
+            handle_serial(key, mask)
+        if t == 'net_listener':
+            handle_listener(key, mask)
+        if t == 'net_client':
+            handle_client(key, mask)
+
+# not reached
+sys.exit(0)
+# EOF

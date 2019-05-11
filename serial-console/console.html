@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+</head>
+<body>
+  <h1>Console</h1>
+  <pre>
+    <div id="output" style="width: 95%; height: 800px; overflow-y: scroll;">
+    </div>
+  </pre>
+  <script>
+    var source = new EventSource('console-client.cgi');
+    source.onmessage = function(e) {
+    var o = document.getElementById("output");
+    o.innerHTML += e.data + '<br>';
+    o.scrollTop = o.scrollHeight;
+    };
+  </script>
+</body>
+</html>
