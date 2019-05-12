@@ -16,6 +16,7 @@ SERIAL_PORT = '/dev/ttyUSB0'
 SERIAL_SPEED = 115200
 ENABLE_SERIAL_WRITE = True
 TCP_HOST = 'localhost'
+# TCP_HOST = '0.0.0.0'
 TCP_PORT = 14242
 LOGLVL = L_DEBUG
 
@@ -35,7 +36,7 @@ def mylog(level, msg):
     if LOGLVL < level: return None
     msg = msg.rstrip()
     for ln in msg.splitlines():
-        sys.stderr.write('[{}] {} {}\n'.format(timestamp(), S_LOGLVL[level], ln))
+        sys.stderr.write('[{}] ({}) {}\n'.format(timestamp(), S_LOGLVL[level], ln))
     return None
 
 
@@ -79,6 +80,13 @@ net_clients = {}
 ###########
 # Functions
 
+def client_status():
+    mylog(L_DEBUG, 'Now I have %d clients:' % len(net_clients))
+    for c in net_clients:
+        mylog(L_DEBUG, repr(net_clients[c].data.addr))
+    return None
+
+
 def cleanup_and_exit():
     try:
         sel.unregister(ser)
@@ -92,45 +100,13 @@ def cleanup_and_exit():
         pass
     for c in net_clients:
         try:
-            key = sel.get_key(c)
-            f = key.fileobj
-            data = key.data
+            f = net_clients[c].fileobj
+            sel.unregister(f)
             f.close()
         except:
             pass
     mylog(L_INFO, 'Clean exit.')
     sys.exit(1)
-    return None
-
-
-def client_status():
-    mylog(L_DEBUG, 'Now I have %d clients:' % len(net_clients))
-    for c in net_clients:
-        key = sel.get_key(c)
-        mylog(L_DEBUG, repr(c))
-        mylog(L_DEBUG, net_clients[c])
-    return None
-
-
-# Handle listener
-# New IO handles of type 'net_client' are made here.
-def handle_listener(key, mask):
-    f = key.fileobj
-    data = key.data
-
-    try:
-        conn, addr = f.accept()
-    except:
-        mylog(L_ERROR, 'accept failed.')
-        return None
-
-    mylog(L_INFO, 'accepted connection from'+str(addr))
-    conn.setblocking(False)
-    newdata = types.SimpleNamespace(stype='net_client', addr=addr, inb=b'', outb=b'')
-    # Only enable read events until we have something to write
-    sel.register(conn, selectors.EVENT_READ, data=newdata)
-    net_clients[conn] = repr(addr)
-    if LOGLVL >= L_DEBUG: client_status()
     return None
 
 
@@ -149,9 +125,9 @@ def handle_serial(key, mask):
         if ser_data:
             mylog(L_DEBUG, 'serial read: '+str(ser_data))
             for c in net_clients:
-                ckey = sel.get_key(c)
+                ckey = net_clients[c]
                 ckey.data.outb += ser_data
-                # Enable write events too to actually send them
+                # Enable write events to actually send them
                 sel.modify(ckey.fileobj,
                            selectors.EVENT_READ|selectors.EVENT_WRITE,
                            ckey.data)
@@ -182,6 +158,30 @@ def handle_serial(key, mask):
     return None
 
 
+# Handle listener
+# New IO handles of type 'net_client' are made here.
+def handle_listener(key, mask):
+    f = key.fileobj
+    data = key.data
+
+    try:
+        conn, addr = f.accept()
+    except:
+        mylog(L_ERROR, 'accept failed.')
+        return None
+
+    mylog(L_INFO, 'accepted connection from '+str(addr))
+    conn.setblocking(False)
+    newdata = types.SimpleNamespace(stype='net_client', addr=addr, inb=b'', outb=b'')
+    # Now enable only read events
+    # Write events get enabled when we have something to write
+    net_clients[conn] = sel.register(conn,
+                                     selectors.EVENT_READ,
+                                     data=newdata)
+    if LOGLVL >= L_DEBUG: client_status()
+    return None
+
+
 # Handle network clients, type 'net_client'
 def handle_client(key, mask):
     f = key.fileobj
@@ -194,15 +194,14 @@ def handle_client(key, mask):
         except:
             recv_data = None
         if recv_data:
-            # If we receive data from network connections,
-            # log it and then throw away.
-            mylog(L_INFO, 'Received data from client '+str(data.addr))
+            mylog(L_INFO, 'Received %d bytes from client %s'
+                  % (len(recv_data), str(data.addr)))
             mylog(L_DEBUG, 'data: '+str(recv_data))
             if ENABLE_SERIAL_WRITE:
                 mylog(L_DEBUG, 'writing to serial')
                 ser_key = sel.get_key(ser)
                 ser_key.data.outb += recv_data
-                # Enable write events too to actually send them
+                # Enable write events to actually send them
                 sel.modify(ser_key.fileobj,
                            selectors.EVENT_READ|selectors.EVENT_WRITE,
                            ser_key.data)
