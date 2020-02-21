@@ -1,0 +1,55 @@
+#!/usr/bin/env python                    
+# -*- coding: utf-8 -*-
+
+import os, sys, re, jinja2
+
+DEBUG = False
+#DEBUG = True
+J2DIR = '.'
+
+myvars = dict()
+mynames = set()
+for f_data in sys.argv[1:]:
+    with open(f_data, 'r') as dfile:
+        lnum = 0
+        for line in dfile:
+            lnum += 1
+            if line.startswith('#'): continue
+            line = line.strip()
+            if not line: continue
+
+            items = line.split()
+            newname = items.pop(0)
+            if newname in mynames:
+                print '*** Warning: duplicate name "%s", file "%s":%d.' \
+                      % (newname, f_data, lnum)
+            else:
+                mynames.add(newname)
+            for v in items:
+                name, value = v.split('=')
+                if name not in myvars: myvars[name] = {}
+                myvars[name][newname] = value
+myvars['_names'] = sorted(mynames)
+
+if DEBUG:
+    print 'myvars = {'
+    for k in sorted(myvars.keys()):
+        print '\'%s\': %s' % (k, repr(myvars[k]))
+    print '}'
+
+j2ld = jinja2.FileSystemLoader(J2DIR)
+j2env = jinja2.Environment(loader=j2ld,
+                           trim_blocks=True,
+                           keep_trailing_newline=True)
+
+for j2t in [f for f in os.listdir(J2DIR) \
+            if f.endswith('.j2') and os.path.isfile(os.path.join(J2DIR, f))]:
+    dst = os.path.join(J2DIR, j2t[:-3])
+    dst_tmp = '%s.%d.tmp' % (dst, os.getpid())
+    j2tmpl = j2env.get_template(j2t)
+    with open(dst_tmp, 'w') as wf:
+        wf.write(j2tmpl.render(myvars))
+    os.rename(dst_tmp, dst)
+
+sys.exit(0)
+# EOF
