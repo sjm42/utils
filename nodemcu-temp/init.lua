@@ -11,7 +11,7 @@ function startup()
         file.close("init.lua")
 
         -- the actual application
-        dofile("power.lua")
+        dofile("temp.lua")
     end
 end
 
