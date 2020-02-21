@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>POWER</title>
+</head>
+<body>
+  <h1>POWER</h1>
+
+  <h2>Status:</h2>
+  <br>
+  <div id="pwrstatus" style="background-color: #E0E0E0 ; padding: 10px; border: 5px solid gray; width: 80%">
+      POWER STATUS PENDING
+    </div>
+  <br>
+  <br>
+  <input type="submit"
+   onclick="refresh_status()"
+   value="REFRESH STATUS"
+   style="font-size : 32px; width: 60%; height: 80px;">
+  <p id="pwr_req"></p>
+  <br>
+  <input type="submit"
+   onclick="pwr_set(1)"
+   value="POWER ON"
+   style="font-size : 32px; width: 60%; height: 80px;">
+  <p></p>
+  <br>
+  <input type="submit"
+   onclick="pwr_set(0)"
+   value="POWER OFF"
+   style="font-size : 32px; width: 60%; height: 80px;">
+  <p></p>
+  <br>
+
+</body>
+
+<script>
+
+function pwr_update() {
+  var o = document.getElementById("pwrstatus");
+  o.innerHTML = "wait...";
+  const Http = new XMLHttpRequest();
+  const url = "/pwr/pwr.cgi";
+  Http.open("GET", url, true);
+  Http.send();
+  Http.onreadystatechange = (e) => {
+    o.innerHTML = Date() + "<br><font size=\"+3\"><b>" + Http.responseText + "</b></font>";
+  }
+}
+
+function pwr_set(state) {
+  var o = document.getElementById("pwr_req");
+  o.innerHTML = "wait...<br>\n";
+  var url = "";
+  if (state) {
+    url = "/pwr/pwr.cgi?on";
+  }
+  else {
+    url = "/pwr/pwr.cgi?off";
+  }
+  const Http = new XMLHttpRequest();
+  Http.open("GET", url, false);
+  Http.onreadystatechange = (e) => {
+    o.innerHTML += Date() + "<br>\nRequested: " + Http.responseText + "<br>\n";
+  }
+  Http.send();
+  pwr_update();
+}
+
+function refresh_status() {
+  var o = document.getElementById("pwr_req");
+  o.innerHTML = "";
+  pwr_update();
+}
+
+pwr_update();
+
+</script>
+</html>

@@ -1,0 +1,7 @@
+Options +Indexes +FollowSymlinks +ExecCGI
+DirectoryIndex index.wsgi index.cgi index.py index.shtml index.html index.txt
+AddHandler cgi-script .cgi
+AddHandler wsgi-script .wsgi
+Require all denied
+Require ip 10.28.0.0/16
+#Require all granted
